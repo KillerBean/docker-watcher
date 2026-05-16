@@ -1,4 +1,6 @@
 import os
+import shutil
+import threading
 import time
 import docker
 import requests
@@ -10,6 +12,14 @@ IGNORED = set(
     for c in os.environ.get("WATCHER_IGNORE", "certbot").split(",")
     if c.strip()
 )
+
+DISK_WARN_PERCENT = int(os.environ.get("DISK_WARN_PERCENT", "80"))
+DISK_CHECK_INTERVAL = int(os.environ.get("DISK_CHECK_INTERVAL", "300"))
+DISK_PATHS = [
+    p.strip()
+    for p in os.environ.get("DISK_PATHS", "/").split(",")
+    if p.strip()
+]
 
 # Exit codes that indicate an intentional/graceful stop
 GRACEFUL_EXIT_CODES = {"0", "143"}  # 143 = 128 + SIGTERM
@@ -57,6 +67,35 @@ def handle_unhealthy(attrs: dict, ts: str) -> None:
     send(f"⚠️ <b>{name}</b> está <b>unhealthy</b>\n⏰ {ts}")
 
 
+def watch_disk() -> None:
+    # Tracks whether each path was already in warning state to avoid spam
+    alerted: dict[str, bool] = {p: False for p in DISK_PATHS}
+
+    while True:
+        for path in DISK_PATHS:
+            try:
+                usage = shutil.disk_usage(path)
+                pct = usage.used * 100 // usage.total
+                over = pct >= DISK_WARN_PERCENT
+
+                print(f"[disk] {path} {pct}% used", flush=True)
+
+                if over and not alerted[path]:
+                    free_gb = usage.free / 1024 ** 3
+                    send(
+                        f"💾 <b>Disco quase cheio</b>: <code>{path}</code>\n"
+                        f"Uso: <b>{pct}%</b> (limite: {DISK_WARN_PERCENT}%)\n"
+                        f"Livre: <code>{free_gb:.1f} GB</code>"
+                    )
+                    alerted[path] = True
+                elif not over:
+                    alerted[path] = False
+            except Exception as e:
+                print(f"[disk] erro ao checar {path}: {e}", flush=True)
+
+        time.sleep(DISK_CHECK_INTERVAL)
+
+
 def watch() -> None:
     client = docker.from_env()
     send("👀 <b>docker-watcher</b> iniciado — monitorando containers")
@@ -86,6 +125,8 @@ def watch() -> None:
 
 
 if __name__ == "__main__":
+    threading.Thread(target=watch_disk, daemon=True).start()
+
     # Reconnect loop — if Docker daemon restarts, events() will raise
     while True:
         try:
