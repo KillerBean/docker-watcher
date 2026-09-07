@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Single-file Python daemon (`watcher.py`) that streams Docker events via the Docker socket and sends Telegram alerts when containers die, OOM, or go unhealthy. No framework, no database — just one loop.
+Python daemon (`watcher.py`) that streams Docker events via the Docker socket
+and sends Telegram alerts when containers die, OOM, or go unhealthy. No
+framework or database.
 
 ## Running locally
 
@@ -25,17 +27,27 @@ The container mounts `/var/run/docker.sock:ro` to receive host Docker events.
 
 ## Architecture
 
-`watcher.py` is the entire application. On startup, a daemon thread runs `watch_disk()` and the main thread runs the Docker event loop.
+`watcher.py` contains the application. On startup, a daemon thread runs
+`watch_disk()` and the main thread supervises the Docker event loop.
 
-- `watch()` — opens `client.events()` stream filtered to `die`, `oom`, `health_status` events; dispatches to handlers
-- `handle_die` — distinguishes graceful (exit 0/143) from crash; sends colored Telegram message
-- `handle_oom` / `handle_unhealthy` — simple Telegram notifications
-- `watch_disk()` — polls `shutil.disk_usage` every `DISK_CHECK_INTERVAL` seconds; sends one alert when a path crosses `DISK_WARN_PERCENT`, then stays silent until it drops back below (avoids spam)
-- `send()` — posts to Telegram Bot API with HTML parse mode
-- Outer `while True` reconnect loop restarts `watch()` if the Docker daemon restarts or the socket drops
+- `watch()` — opens `client.events()` filtered to `die`, `oom`, `health_status`; dispatches validated events
+- `process_event()` — rejects malformed events, applies `WATCHER_IGNORE`, and records counters
+- `TelegramNotifier` — escapes/bounds messages, applies the alert rate limit and records send/failure/drop counters
+- `watch_disk()` — polls `shutil.disk_usage` and deduplicates a warning until the path recovers
+- `run()` — reconnects after stream failure with bounded exponential backoff and jitter
 
 `WATCHER_IGNORE` env var (comma-separated container names) prevents alerts for known-benign containers (default: `certbot`).
 
 ## Dependencies
 
-Pinned in Dockerfile: `docker==7.1.0`, `requests==2.32.3`. No `requirements.txt` — update pins directly in `Dockerfile`.
+Pinned in `requirements.txt`: `docker==7.1.0`, `requests==2.32.3`.
+
+## Tests
+
+```bash
+python -m unittest discover -s tests -v
+python -m py_compile watcher.py
+```
+
+Security and operational guidance live in `docs/security/THREAT-MODEL.md` and
+`docs/ops/RUNBOOKS.md`.
