@@ -1,0 +1,13 @@
+.git
+.github
+docs
+tests
+__pycache__
+*.pyc
+.env
+.env.*
+AGENTS.md
+CLAUDE.md
+CHANGELOG.md
+README.md
+SECURITY.md
